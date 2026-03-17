@@ -48,7 +48,7 @@ module "lb_sg" {
   ]
   egress_rules = [
     {
-      description     = "Allow outbound traffic to al"
+      description     = "Allow outbound traffic to all"
       from_port       = 0
       to_port         = 0
       protocol        = "-1"
@@ -57,7 +57,6 @@ module "lb_sg" {
     }
   ]
   tags = {
-    Environment = "${var.env}"
     Project     = var.project
   }
 }
@@ -69,8 +68,8 @@ module "ecs_sg" {
   ingress_rules = [
     {
       description     = "ECS Frontend Traffic"
-      from_port       = 3000
-      to_port         = 3000
+      from_port       = 80
+      to_port         = 80
       protocol        = "tcp"
       security_groups = [module.lb_sg.id]
       cidr_blocks     = []
@@ -87,7 +86,6 @@ module "ecs_sg" {
     }
   ]
   tags = {
-    Environment = "${var.env}"
     Project     = var.project
   }
 }
@@ -100,8 +98,7 @@ module "container_registry" {
   force_delete         = true
   scan_on_push         = false
   image_tag_mutability = "IMMUTABLE"
-  bash_command         = "bash ${path.cwd}/../../../../../src/frontend/artifact_push.sh ml-container ${var.region}"
-  name                 = "ml-container"
+  name                 = "ml_container"
   lifecycle_policy = jsonencode({
     rules = [
       {
@@ -137,6 +134,21 @@ module "container_registry" {
 
   # encryption_type = "KMS"
   # kms_key         = module.carshub_kms_ecr.key_id
+}
+
+resource "null_resource" "build_and_push_container" {
+  # Re-trigger build if any of these change
+  triggers = {
+    image_tag         = "latest"
+  }
+
+  provisioner "local-exec" {
+    command = "bash ${path.cwd}/../src/frontend/artifact_push.sh ml_container ${var.region}"
+  }
+
+  depends_on = [
+    module.container_registry
+  ]
 }
 
 module "ecs_log_group" {
@@ -235,7 +247,7 @@ module "lb" {
   target_groups = {
     lb_target_group = {
       backend_protocol = "HTTP"
-      backend_port     = 3000
+      backend_port     = 80
       target_type      = "ip"
       vpc_id           = module.vpc.vpc_id
       health_check = {
@@ -243,7 +255,7 @@ module "lb" {
         healthy_threshold   = 3
         interval            = 30
         path                = "/"
-        port                = 3000
+        port                = 80
         protocol            = "HTTP"
         unhealthy_threshold = 3
       }
@@ -263,7 +275,7 @@ module "ecs_cluster" {
   source       = "terraform-aws-modules/ecs/aws"
   cluster_name = "ecs-cluster"
   services = {
-    ecs_frontend = {
+    ml_container = {
       cpu                    = 2048
       memory                 = 4096
       task_exec_iam_role_arn = module.ecs_task_execution_role.arn
@@ -282,13 +294,13 @@ module "ecs_cluster" {
       scheduling_strategy      = "REPLICA"
       requires_compatibilities = ["FARGATE"]
       container_definitions = {
-        ecs_frontend = {
+        ml_container = {
           cpu       = 1024
           memory    = 2048
           essential = true
           image     = "${module.container_registry.repository_url}:latest"
           healthCheck = {
-            command = ["CMD-SHELL", "curl -f http://localhost:3000/auth/signin || exit 1"]
+            command = ["CMD-SHELL", "curl -f http://localhost:80 || exit 1"]
           }
           ulimits = [
             {
@@ -299,9 +311,9 @@ module "ecs_cluster" {
           ]
           portMappings = [
             {
-              name          = "ecs_frontend"
-              containerPort = 3000
-              hostPort      = 3000
+              name          = "ml_container"
+              containerPort = 80
+              hostPort      = 80
               protocol      = "tcp"
             }
           ]
@@ -328,8 +340,8 @@ module "ecs_cluster" {
       load_balancer = {
         service = {
           target_group_arn = module.lb.target_groups["lb_target_group"].arn
-          container_name   = "ml-container"
-          container_port   = 3000
+          container_name   = "ml_container"
+          container_port   = 80
         }
       }
       subnet_ids                    = module.vpc.private_subnets
