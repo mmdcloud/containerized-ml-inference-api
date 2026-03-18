@@ -57,7 +57,7 @@ module "lb_sg" {
     }
   ]
   tags = {
-    Project     = var.project
+    Project = var.project
   }
 }
 
@@ -86,7 +86,7 @@ module "ecs_sg" {
     }
   ]
   tags = {
-    Project     = var.project
+    Project = var.project
   }
 }
 
@@ -139,7 +139,7 @@ module "container_registry" {
 resource "null_resource" "build_and_push_container" {
   # Re-trigger build if any of these change
   triggers = {
-    image_tag         = "latest"
+    image_tag = "latest"
   }
 
   provisioner "local-exec" {
@@ -151,16 +151,9 @@ resource "null_resource" "build_and_push_container" {
   ]
 }
 
-module "ecs_log_group" {
-  source            = "./modules/cloudwatch/cloudwatch-log-group"
-  log_group_name    = "/aws/ecs/ml-container-service"
-  skip_destroy      = false
-  retention_in_days = 90
-}
-
 module "lb_logs" {
   source      = "./modules/s3"
-  bucket_name = "lb-logs"
+  bucket_name = "lb-logs-${var.region}"
   objects     = []
   bucket_policy = jsonencode({
     Version = "2012-10-17"
@@ -172,7 +165,7 @@ module "lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::lb-logs-${var.env}-${var.region}/*"
+        Resource = "arn:aws:s3:::lb-logs-${var.region}/*"
       },
       {
         Sid    = "AWSLogDeliveryAclCheck"
@@ -181,7 +174,7 @@ module "lb_logs" {
           Service = "logging.s3.amazonaws.com"
         }
         Action   = "s3:GetBucketAcl"
-        Resource = "arn:aws:s3:::lb-logs-${var.env}-${var.region}"
+        Resource = "arn:aws:s3:::lb-logs-${var.region}"
       },
       {
         Sid    = "AWSELBAccountWrite"
@@ -190,7 +183,7 @@ module "lb_logs" {
           AWS = "arn:aws:iam::${data.aws_elb_service_account.main.id}:root"
         }
         Action   = "s3:PutObject"
-        Resource = "arn:aws:s3:::lb-logs-${var.env}-${var.region}/*"
+        Resource = "arn:aws:s3:::lb-logs-${var.region}/*"
       }
     ]
   })
@@ -211,8 +204,7 @@ module "lb_logs" {
   versioning_enabled = "Enabled"
   force_destroy      = true
   tags = {
-    Environment = "${var.env}"
-    Project     = var.project
+    Project = var.project
   }
 }
 
@@ -271,6 +263,63 @@ module "lb" {
 # -----------------------------------------------------------------------------------------
 # ECS Configuration
 # -----------------------------------------------------------------------------------------
+module "ecs_log_group" {
+  source            = "./modules/cloudwatch/cloudwatch-log-group"
+  log_group_name    = "/aws/ecs/ecs-log-group-${var.region}"
+  skip_destroy      = false
+  retention_in_days = 90
+  tags = {
+    Name    = "/aws/ecs/ecs-log-group-${var.region}"
+    Project = var.project
+  }
+}
+
+module "ecs_task_execution_role" {
+  source             = "./modules/iam"
+  role_name          = "ecs-task-execution-role-${var.region}"
+  role_description   = "IAM role for ECS task execution"
+  policy_name        = "ecs-task-execution-policy-${var.region}"
+  policy_description = "IAM policy for ECS task execution"
+  assume_role_policy = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+                "Action": "sts:AssumeRole",
+                "Principal": {
+                  "Service": "ecs-tasks.amazonaws.com"
+                },
+                "Effect": "Allow",
+                "Sid": ""
+            }
+        ]
+    }
+    EOF
+  policy             = <<EOF
+    {
+        "Version": "2012-10-17",
+        "Statement": [
+            {
+              "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+              ],
+              "Resource": [
+                "${module.ecs_log_group.arn}:*",
+                "${module.ecs_log_group.arn}:*"
+              ],
+              "Effect": "Allow"
+            }
+        ]
+    }
+    EOF
+  tags = {
+    Name    = "ecs-task-execution-role-${var.region}"
+    Project = var.project
+  }
+}
+
 module "ecs_cluster" {
   source       = "terraform-aws-modules/ecs/aws"
   cluster_name = "ecs-cluster"
