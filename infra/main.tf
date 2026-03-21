@@ -143,7 +143,7 @@ resource "null_resource" "build_and_push_container" {
   }
 
   provisioner "local-exec" {
-    command = "bash ${path.cwd}/../src/frontend/artifact_push.sh ml_container ${var.region}"
+    command = "bash ${path.cwd}/../src/artifact_push.sh ml_container ${var.region}"
   }
 
   depends_on = [
